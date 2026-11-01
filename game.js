@@ -1,6 +1,5 @@
 /* ============================================================
-   game.js — เอนจินหลัก: state machine, สถิติ, ไทม์ไลน์, บันทึก
-   (เชื่อมโยงสายอาชีพ/ปณิธานชีวิต + สถิติประชากร + สาเหตุการตาย)
+   game.js — เอนจินหลัก (เปิดอิสระ 100% + Dynamic Synergy Bonus)
    ============================================================ */
 (function () {
   const D = GAME_DATA;
@@ -9,13 +8,11 @@
   const modal = document.getElementById("modal");
   const pauseEl = document.getElementById("pause");
   const fader = document.getElementById("fader");
-  const toast = document.getElementById("toast");
 
   const YEAR_MIN = 2411, YEAR_MAX = 2500;
   const REIGN_END = 2500;
   const TOTAL_POPULATION = 7000000;
 
-  /* ---------------- สถานะเกม ---------------- */
   let G = null;
   let records = loadRecords();
   let screen = "title";
@@ -30,7 +27,6 @@
     };
   }
 
-  /* ---------------- localStorage ---------------- */
   function loadRecords() {
     try {
       const r = JSON.parse(localStorage.getItem("r5_records") || "null");
@@ -42,7 +38,6 @@
     try { localStorage.setItem("r5_records", JSON.stringify(records)); } catch (e) {}
   }
 
-  /* ---------------- ยูทิลิตี้ ---------------- */
   const TH_D = "๐๑๒๓๔๕๖๗๘๙";
   const th = (n) => String(n).replace(/\d/g, (d) => TH_D[+d]);
   const clamp = (v) => Math.max(0, Math.min(100, Math.round(v)));
@@ -55,18 +50,17 @@
     setTimeout(() => { cb(); fader.classList.remove("on"); }, 580);
   }
 
-  /* ---------------- พื้นหลัง ---------------- */
   let bgFlip = false;
   function setBG(key, fxMode) {
     const a = document.getElementById("bg-a"), b = document.getElementById("bg-b");
+    if (!a || !b) return;
     const showEl = bgFlip ? a : b, hideEl = bgFlip ? b : a;
     showEl.style.backgroundImage = `url("assets/${key}.jpg")`;
     showEl.classList.add("show"); hideEl.classList.remove("show");
     bgFlip = !bgFlip;
-    FX.setMode(fxMode || (key === "night" ? "firefly" : key === "village" || key === "forest" ? "petal" : "dust"));
+    if (window.FX) FX.setMode(fxMode || (key === "night" ? "firefly" : key === "village" || key === "forest" ? "petal" : "dust"));
   }
 
-  /* ---------------- HUD & แถบสถานะ ---------------- */
   function renderStats() {
     const box = document.getElementById("stats");
     if (!box) return;
@@ -117,6 +111,7 @@
   function setTimeline(year, ageLabel) {
     const cursor = document.getElementById("timeline-cursor");
     const reign = document.getElementById("timeline-reign");
+    if (!cursor || !reign) return;
     const pct = (y) => ((y - YEAR_MIN) / (YEAR_MAX - YEAR_MIN)) * 100;
     cursor.style.left = pct(Math.min(year, YEAR_MAX)) + "%";
     reign.style.left = "0%";
@@ -138,16 +133,16 @@
         `<span style="color:${v >= 0 ? "#2e7d4f" : "#b34747"}">${D.statMeta[k].ico} ${v >= 0 ? "+" : ""}${v}</span>`
       ).join(" ");
       animateStatDeltas(Object.fromEntries(deltas));
-      AudioSys.sfx(card.effect.joy < 0 || card.effect.hp < 0 ? "gong" : "bell");
+      if (window.AudioSys) AudioSys.sfx(card.effect.joy < 0 || card.effect.hp < 0 ? "gong" : "bell");
     } else {
       effBox.innerHTML = "";
-      AudioSys.sfx("bell");
+      if (window.AudioSys) AudioSys.sfx("bell");
     }
     modal.classList.remove("hidden");
     document.getElementById("modal-ok").onclick = () => {
       modal.classList.add("hidden");
       modalOpen = false;
-      AudioSys.sfx("page");
+      if (window.AudioSys) AudioSys.sfx("page");
       cb && cb();
     };
   }
@@ -204,30 +199,38 @@
     return { percentile, approxPeople };
   }
 
-  /* ---------------- คัดกรองตัวเลือกที่ตรงกับสายอาชีพ/ปณิธาน ---------------- */
+  /* ---------------- ระบบตรวจเช็กความเชื่อมโยงกับวัยเด็ก (Dynamic Synergy) ---------------- */
+  function checkChildhoodSynergy(c) {
+    if (!G || !G.flags) return false;
+    const childInterest = G.flags.find(f => f.startsWith("interest_"));
+    if (!childInterest) return false;
+    const domainKey = childInterest.replace("interest_", "");
+    
+    // ตรวจสอบ Tag ของตัวเลือกหรือ Flag ปัจจุบันว่าตรงกับสายความสนใจในวัยเด็กหรือไม่
+    if (c.tags && c.tags.includes(domainKey)) return true;
+    if (c.flag && c.flag.includes(domainKey)) return true;
+    
+    // การจับคู่เปรียบเทียบคำพ้อง
+    if (domainKey === "freeman" && c.tags && c.tags.includes("joy")) return true;
+    return false;
+  }
+
   function eligibleChoices(st) {
+    // ปลดล็อกตัวเลือกให้สุ่มหรือเลือกเล่นได้อิสระ 100% โดยกรองเฉพาะเพศ
     const ok = st.choices.filter(c => {
       if (c.gender && c.gender !== G.gender) return false;
-      if (c.require) for (const k in c.require) if (G.stats[k] < c.require[k]) return false;
-      if (c.flag_req && !G.flags.includes(c.flag_req)) return false;
       return true;
     });
 
     const shuffled = (a) => [...a].sort(() => Math.random() - 0.5);
-    
-    // แยกตัวเลือกที่ตรงกับสายอาชีพ (Origin) หรือปณิธาน (Dream)
-    const matches = shuffled(ok.filter(c => 
-      c.tags.includes(G.origin) || c.tags.includes(G.dream) || (c.dream_tag && c.dream_tag === G.dream)
-    ));
-    const general = shuffled(ok.filter(c => 
-      !c.tags.includes(G.origin) && !c.tags.includes(G.dream) && c.dream_tag !== G.dream
-    ));
+    const matches = shuffled(ok.filter(c => checkChildhoodSynergy(c)));
+    const general = shuffled(ok.filter(c => !checkChildhoodSynergy(c)));
 
     const chosen = [...matches, ...general].slice(0, 3);
     return chosen.length >= 3 ? chosen : shuffled(ok).slice(0, 3);
   }
 
-  /* ---------------- หน้าจอต่างๆ ---------------- */
+  /* ---------------- หน้าจอต่าง ๆ ---------------- */
   function screenTitle() {
     screen = "title";
     hud.classList.add("hidden");
@@ -238,7 +241,7 @@
           <div class="title-ornament">❦ ❦ ❦</div>
           <h1 class="game-title">หนึ่งในเจ็ดล้าน</h1>
           <div class="game-subtitle">ชีวิตในแผ่นดินรัชกาลที่ ๕</div>
-          <p class="title-tagline">จำลองชีวิตหนึ่งชีวิตท่ามกลางสยามยุคปฏิรูป พ.ศ. ๒๔๒๑–๒๔๙๖<br>ผ่านร้อนผ่านหนาว ๔ รัชกาลจนถึงวัยชรา — ทุกทางเลือกเขียนชะตาของเธอ</p>
+          <p class="title-tagline">จำลองชีวิตหนึ่งชีวิตท่ามกลางสยามยุคปฏิรูป พ.ศ. ๒๔๒๑–๒๔๙๖<br>เลือกได้อย่างอิสระทุกช่วงวัย — ทักษะในวัยเด็กจะส่งผลต่อยอดสู่อนาคต</p>
           <div class="title-buttons">
             <button id="btn-start" class="btn btn-primary">🌅 เริ่มชะตาชีวิต</button>
             <button id="btn-gallery" class="btn">📖 คลังตอนจบ</button>
@@ -248,12 +251,12 @@
         </div>
       </section>`;
     const rec = document.getElementById("title-records");
-    if (records.lives > 0) {
+    if (records.lives > 0 && rec) {
       rec.textContent = `เคยใช้ชีวิตแล้ว ${th(records.lives)} ชีวิต • บารมีสูงสุด ${th(records.best)} • ปลดล็อกตอนจบ ${th(records.endings.length)}/${th(D.endings.length)}`;
     }
-    document.getElementById("btn-start").onclick = () => { AudioSys.unlock(); AudioSys.sfx("birth"); setupSel.origin = null; setupSel.dream = null; setupSel.name = ""; screenSetup(0); };
-    document.getElementById("btn-gallery").onclick = () => { AudioSys.unlock(); AudioSys.sfx("page"); screenGallery(); };
-    AudioSys.unlock();
+    document.getElementById("btn-start").onclick = () => { if (window.AudioSys) { AudioSys.unlock(); AudioSys.sfx("birth"); } setupSel.origin = null; setupSel.dream = null; setupSel.name = ""; screenSetup(0); };
+    document.getElementById("btn-gallery").onclick = () => { if (window.AudioSys) { AudioSys.unlock(); AudioSys.sfx("page"); } screenGallery(); };
+    if (window.AudioSys) AudioSys.unlock();
   }
 
   const setupSel = { origin: null, dream: null, gender: "m", name: "", birthYear: 2421 };
@@ -268,13 +271,13 @@
 
   function screenSetup(step) {
     screen = "setup";
-    AudioSys.sfx("page");
+    if (window.AudioSys) AudioSys.sfx("page");
     const dots = `<div class="setup-steps">${[0, 1].map(i => `<div class="step-dot ${i <= step ? "on" : ""}"></div>`).join("")}</div>`;
 
     if (step === 0) {
       ui.innerHTML = `
         <section class="screen"><div class="setup-wrap">
-          <h2 class="setup-title">ความฝันและสายอาชีพ</h2>
+          <h2 class="setup-title">ความฝันและปณิธานชีวิต</h2>
           <p class="setup-sub">เลือกเส้นทางที่เธอปรารถนา — ทางเลือกในชีวิตจะส่งเสริมตามปณิธานนี้</p>
           ${dots}
           <div class="cards-grid">
@@ -289,7 +292,7 @@
       ui.querySelectorAll(".pick-card").forEach(c => {
         c.onclick = () => {
           setupSel.dream = c.dataset.id;
-          AudioSys.sfx("chime");
+          if (window.AudioSys) AudioSys.sfx("chime");
           c.classList.add("selected");
           rollPersona();
           setTimeout(() => screenSetup(1), 380);
@@ -302,7 +305,7 @@
 
       ui.innerHTML = `
         <section class="screen"><div class="setup-wrap" style="max-width:640px">
-          <h2 class="setup-title">ชะตาชีวิตของคุณ</h2>
+          <h2 class="setup-title">ชะตาชีวิตแรกเกิด</h2>
           <p class="setup-sub">โชคชะตาได้กำหนดชื่อ เพศ ปีเกิด และชาติตระกูลให้คุณเรียบร้อยแล้ว</p>
           ${dots}
           <div class="paper-panel" style="margin-top:4px">
@@ -338,9 +341,9 @@
     G.dream = setupSel.dream;
     const o = D.origins.find(x => x.id === G.origin) || D.origins[0];
     if (o && o.base) G.stats = { ...o.base };
-    AudioSys.sfx("birth");
+    if (window.AudioSys) AudioSys.sfx("birth");
 
-    const INFANT_MORTALITY_RATE = 0.15;
+    const INFANT_MORTALITY_RATE = 0.35;
     if (Math.random() < INFANT_MORTALITY_RATE) {
       G.dead = true;
       G.stats.hp = 0;
@@ -349,7 +352,7 @@
 
       fade(() => {
         hud.classList.add("hidden");
-        AudioSys.sfx("gong");
+        if (window.AudioSys) AudioSys.sfx("gong");
         showModal({
           ribbon: "🕯️ โชคชะตาแสนสั้น (อัตราการตายทารกยุคโบราณ)",
           year: "พ.ศ. " + th(G.year),
@@ -404,13 +407,13 @@
           <div class="scene-text">${intro}</div>
           <div class="choice-list">
             ${choices.map((c, i) => {
-              const isCareerMatched = c.tags.includes(G.origin) || c.tags.includes(G.dream) || c.dream_tag === G.dream;
-              const careerBadge = isCareerMatched ? `<span style="font-size:0.75em; color:#d97706; font-weight:bold; margin-left:6px;">[🌟 ตรงสายอาชีพ]</span>` : "";
+              const isSynergy = checkChildhoodSynergy(c);
+              const synergyBadge = isSynergy ? `<span style="font-size:0.75em; color:#d97706; font-weight:bold; margin-left:6px;">[🌟 ต่อยอดปณิธานวัยเด็ก]</span>` : "";
               return `
               <button class="choice-btn" data-i="${i}">
                 <span class="c-num">${i + 1}</span>
                 <span class="c-ico">${c.ico}</span>
-                <span class="c-txt">${c.text}${careerBadge}</span>
+                <span class="c-txt">${c.text}${synergyBadge}</span>
                 <span class="c-hint">${c.hint}</span>
               </button>`;
             }).join("")}
@@ -430,7 +433,7 @@
   function chooseChoice(st, i, btn) {
     if (modalOpen) return;
     const c = G._currentChoices[i];
-    AudioSys.sfx("chime");
+    if (window.AudioSys) AudioSys.sfx("chime");
     ui.querySelectorAll(".choice-btn").forEach(b => b.disabled = true);
     btn.classList.add("picked");
     setTimeout(() => resolveChoice(st, c), 420);
@@ -444,7 +447,7 @@
       G.dead = true;
       G.deathCause = c.deathMsg || getRandomDeathCause(st.age);
       G.log.push({ year: st.year, text: `💀 ชะตาขาด: ${c.text}` });
-      AudioSys.sfx("gong");
+      if (window.AudioSys) AudioSys.sfx("gong");
 
       showModal({
         ribbon: "💀 วาระสุดท้ายของชีวิต",
@@ -457,31 +460,40 @@
       return;
     }
 
-    // คำนวณโบนัสตรงสายอาชีพ (+2)
+    // คำนวณ Synergy Bonus (+3) ย้อนหลังหากตรงกับวัยเด็ก
     let effMod = { ...c.eff };
-    const isMatched = c.tags.includes(G.origin) || c.tags.includes(G.dream) || c.dream_tag === G.dream;
-    if (isMatched) {
+    const isSynergy = checkChildhoodSynergy(c);
+    if (isSynergy) {
       const dreamObj = D.dreams.find(d => d.id === G.dream);
       const targetStat = dreamObj ? dreamObj.stat : "wis";
       if (typeof effMod[targetStat] === "number") {
-        effMod[targetStat] += 2;
+        effMod[targetStat] += 3;
+      } else {
+        effMod["wis"] = (effMod["wis"] || 0) + 3;
       }
     }
 
     const deltas = applyEffects(effMod, true);
     animateStatDeltas(Object.fromEntries(deltas));
     const good = deltas.reduce((s, [, v]) => s + v, 0) >= 0;
-    setTimeout(() => AudioSys.sfx(good ? "good" : "bad"), 250);
+    setTimeout(() => { if (window.AudioSys) AudioSys.sfx(good ? "good" : "bad"); }, 250);
     G.log.push({ year: st.year, text: c.text });
 
     const chips = deltas.map(([k, v]) =>
       `<span class="fx-chip ${v >= 0 ? "up" : "down"}">${D.statMeta[k].ico} ${D.statMeta[k].name} ${v >= 0 ? "+" : ""}${v}</span>`).join("");
 
+    let customNote = "";
+    if (isSynergy) {
+      customNote = ' <br><b style="color:#d97706;">✨ (ความรู้และปณิธานที่สั่งสมตั้งแต่ ๘ ขวบ ส่งผลให้เติบโตในเส้นทางนี้ได้อย่างรวดเร็ว +๓)</b>';
+    } else if (st.id === "teen") {
+      customNote = ' <br><b style="color:#2e7d4f;">💡 (แม้จะก้าวสู่เส้นทางใหม่ แต่ประสบการณ์ในวัยเด็กก็นำมาประยุกต์ใช้ได้อย่างน่าทึ่ง)</b>';
+    }
+
     const panel = document.querySelector(".scene-panel");
     panel.innerHTML = `
       <div class="scene-head"><span class="scene-stage">${st.stage} • ผลลัพธ์</span></div>
       <div class="result-panel">
-        <p class="result-text">${esc(c.result({ name: G.name }))}${isMatched ? ' <b style="color:#d97706;">(ได้รับโบนัสความชำนาญตรงสายอาชีพ +๒)</b>' : ''}</p>
+        <p class="result-text">${esc(c.result({ name: G.name }))}${customNote}</p>
         <div class="result-effects">${chips}</div>
       </div>
       <div class="center-row"><button id="btn-next" class="btn btn-primary">ดำเนินชีวิตต่อ →</button></div>`;
@@ -489,11 +501,11 @@
   }
 
   function afterStage(st) {
-    AudioSys.sfx("page");
+    if (window.AudioSys) AudioSys.sfx("page");
     if (checkDeath()) { screenEnding(); return; }
 
     if (checkSuddenDeath(st.age)) {
-      AudioSys.sfx("gong");
+      if (window.AudioSys) AudioSys.sfx("gong");
       showModal({
         ribbon: "⚡ อนิจจังของชีวิต (ความเสี่ยงสุ่มกะทันหัน)",
         year: "พ.ศ. " + th(st.year),
@@ -505,14 +517,15 @@
       return;
     }
 
-    if (Math.random() < 0.42) {
+    if (Math.random() < 0.45) {
       if (!G.usedEvents) G.usedEvents = [];
       const pool = D.miniEvents.filter(e => {
         if (st.year < e.years[0] || st.year > e.years[1]) return false;
         if (G.usedEvents.includes(e.title)) return false;
         if (e.tags) {
           const o = D.origins.find(x => x.id === G.origin) || D.origins[0];
-          if (!e.tags.some(t => o.tags.includes(t))) return false;
+          const hasMatchingTag = e.tags.some(t => o.tags.includes(t) || G.flags.includes("career_" + t) || G.flags.includes("interest_" + t));
+          if (!hasMatchingTag) return false;
         }
         return true;
       });
@@ -545,8 +558,8 @@
 
   function screenEnding() {
     screen = "ending";
-    AudioSys.sfx(G.dead ? "sigh" : "unlock");
-    const ending = D.endings.find(e => e.cond(G));
+    if (window.AudioSys) AudioSys.sfx(G.dead ? "sigh" : "unlock");
+    const ending = D.endings.find(e => e.cond(G)) || D.endings[D.endings.length - 1];
     const isNew = !records.endings.includes(ending.id);
     if (isNew) records.endings.push(ending.id);
     records.lives++;
@@ -576,6 +589,17 @@
       ? (G.deathCause || getRandomDeathCause(ageAtEnd))
       : "สิ้นอายุขัยตามธรรมชาติด้วยโรคชรายามชราภาพ";
 
+    // สรุปประวัติปณิธานในวัยเด็ก
+    const childFlag = G.flags.find(f => f.startsWith("interest_"));
+    const childText = childFlag 
+      ? childFlag.replace("interest_scholar", "เรียนหนังสือ/วิชาการ")
+                 .replace("interest_merchant", "การค้าขาย/คิดเงิน")
+                 .replace("interest_artisan", "งานช่างฝีมือ")
+                 .replace("interest_soldier", "ฝึกฝนทักษะการต่อสู้")
+                 .replace("interest_doctor", "ศึกษายาสมุนไพร")
+                 .replace("interest_freeman", "วิ่งเล่นสั่งสมประสบการณ์ชีวิต")
+      : "การเรียนรู้ในวัยเยาว์";
+
     const deathCardHtml = `
       <div style="background:${G.dead ? 'rgba(179, 71, 71, 0.12)' : 'rgba(46, 125, 79, 0.12)'}; border:1px solid ${G.dead ? '#b34747' : '#2e7d4f'}; padding:12px; border-radius:8px; margin:12px 0; text-align:center;">
         <div style="font-size:0.85em; color:${G.dead ? '#8b0000' : '#1e5233'}; font-weight:bold; margin-bottom:4px;">
@@ -600,16 +624,20 @@
 
           ${deathCardHtml}
 
+          <div style="background:rgba(46,125,79,0.08); border:1px dashed #2e7d4f; padding:10px; border-radius:8px; margin:8px 0; text-align:center; font-size:0.9em; color:#1e5233;">
+            🌱 <b>เส้นทางชีวิตจากวัยเด็ก:</b> จากการสั่งสมความสนใจในเรื่อง <b>"${childText}"</b> ตอนอายุ ๘ ขวบ ได้กลายเป็นรากฐานสำคัญที่ส่งผลต่อชีวิตตลอดทั้ง ๔ รัชกาล
+          </div>
+
           <div style="background:rgba(185,138,58,0.12); border:1px dashed #b98a3a; padding:12px; border-radius:8px; margin:12px 0; text-align:center;">
             <div style="font-size:0.9em; color:#555;">📊 สถิติชะตาชีวิตในแผ่นดิน:</div>
             <div style="font-size:1.1em; font-weight:bold; color:#2c1d11;">
               คุณคือกลุ่มประชากร <span style="color:#b34747; font-size:1.2em;">Top ${rankInfo.percentile}%</span> ของประชากรสยาม ๗ ล้านคน
             </div>
-            <div style="font-size:0.85em; color:#666; margin-top:2px;">(ประมาณอันดับที่ ${th(rankInfo.approxPeople)} จาก ๗,๐๐٠,๐๐٠ ชีวิต)</div>
+            <div style="font-size:0.85em; color:#666; margin-top:2px;">(ประมาณอันดับที่ ${th(rankInfo.approxPeople)} จาก ๗,๐๐๐,๐๐๐ ชีวิต)</div>
           </div>
 
           <div class="ending-dream ${dreamOK ? "ok" : dreamMid ? "mid" : "no"}">
-            ${dream ? `${dream.ico} ความฝันสายอาชีพ “${dream.name}” — ${dreamOK ? "บรรลุเป้าหมายสูงสุดในสายงาน!" : dreamMid ? "ประสบความสำเร็จตามสมควร" : "ฝันไม่สำเร็จ แต่ชีวิตยังมีค่า"}` : ""}
+            ${dream ? `${dream.ico} ความฝัน “${dream.name}” — ${dreamOK ? "บรรลุเป้าหมายสูงสุด!" : dreamMid ? "ประสบความสำเร็จตามสมควร" : "ฝันไม่สำเร็จ แต่ชีวิตยังมีค่า"}` : ""}
           </div>
           <div class="ending-story">${esc(story)}</div>
           <div class="ending-stats">
@@ -625,13 +653,13 @@
           </div>
         </div>
       </section>`;
-    if (isNew && !G.dead) {
+    if (isNew && !G.dead && window.FX) {
       const rect = ui.querySelector(".ending-panel").getBoundingClientRect();
       FX.burst(rect.left + rect.width / 2, rect.top + 60);
     }
-    document.getElementById("btn-again").onclick = () => { AudioSys.sfx("page"); setupSel.origin = null; setupSel.dream = null; setupSel.name = ""; screenSetup(0); };
-    document.getElementById("btn-gal2").onclick = () => { AudioSys.sfx("page"); screenGallery(); };
-    document.getElementById("btn-home").onclick = () => { AudioSys.sfx("page"); screenTitle(); };
+    document.getElementById("btn-again").onclick = () => { if (window.AudioSys) AudioSys.sfx("page"); setupSel.origin = null; setupSel.dream = null; setupSel.name = ""; screenSetup(0); };
+    document.getElementById("btn-gal2").onclick = () => { if (window.AudioSys) AudioSys.sfx("page"); screenGallery(); };
+    document.getElementById("btn-home").onclick = () => { if (window.AudioSys) AudioSys.sfx("page"); screenTitle(); };
   }
 
   function screenGallery() {
@@ -659,27 +687,45 @@
           </div>
         </div>
       </section>`;
-    document.getElementById("btn-back").onclick = () => { AudioSys.sfx("page"); screenTitle(); };
+    document.getElementById("btn-back").onclick = () => { if (window.AudioSys) AudioSys.sfx("page"); screenTitle(); };
   }
 
   const btnMute = document.getElementById("btn-mute");
-  function syncMute() { btnMute.textContent = AudioSys.muted ? "🔕" : "🔔"; }
-  btnMute.onclick = () => { AudioSys.unlock(); AudioSys.setMuted(!AudioSys.muted); syncMute(); if (!AudioSys.muted) AudioSys.sfx("click"); };
+  function syncMute() { 
+    if (btnMute && window.AudioSys) btnMute.textContent = AudioSys.muted ? "🔕" : "🔔"; 
+  }
+  if (btnMute) {
+    btnMute.onclick = () => { 
+      if (window.AudioSys) {
+        AudioSys.unlock(); 
+        AudioSys.setMuted(!AudioSys.muted); 
+        syncMute(); 
+        if (!AudioSys.muted) AudioSys.sfx("click");
+      }
+    };
+  }
   syncMute();
 
-  document.getElementById("btn-pause").onclick = togglePause;
+  const btnPause = document.getElementById("btn-pause");
+  if (btnPause) btnPause.onclick = togglePause;
+
   function togglePause() {
     if (screen !== "play") return;
     paused = !paused;
-    pauseEl.classList.toggle("hidden", !paused);
-    AudioSys.sfx("click");
+    if (pauseEl) pauseEl.classList.toggle("hidden", !paused);
+    if (window.AudioSys) AudioSys.sfx("click");
   }
-  document.getElementById("pause-resume").onclick = togglePause;
-  document.getElementById("pause-restart").onclick = () => { paused = false; pauseEl.classList.add("hidden"); setupSel.origin = null; setupSel.dream = null; setupSel.name = ""; screenSetup(0); };
-  document.getElementById("pause-title").onclick = () => { paused = false; pauseEl.classList.add("hidden"); screenTitle(); };
+
+  const pauseResume = document.getElementById("pause-resume");
+  const pauseRestart = document.getElementById("pause-restart");
+  const pauseTitle = document.getElementById("pause-title");
+
+  if (pauseResume) pauseResume.onclick = togglePause;
+  if (pauseRestart) pauseRestart.onclick = () => { paused = false; if (pauseEl) pauseEl.classList.add("hidden"); setupSel.origin = null; setupSel.dream = null; setupSel.name = ""; screenSetup(0); };
+  if (pauseTitle) pauseTitle.onclick = () => { paused = false; if (pauseEl) pauseEl.classList.add("hidden"); screenTitle(); };
 
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "m" || ev.key === "M") { btnMute.onclick(); return; }
+    if (ev.key === "m" || ev.key === "M") { if (btnMute) btnMute.click(); return; }
     if (ev.key === "Escape") { togglePause(); return; }
     if (paused) return;
     if (modalOpen && (ev.key === "Enter" || ev.key === " ")) {
@@ -700,7 +746,7 @@
     }
   });
 
-  document.addEventListener("pointerdown", () => AudioSys.unlock(), { once: true });
+  document.addEventListener("pointerdown", () => { if (window.AudioSys) AudioSys.unlock(); }, { once: true });
 
   screenTitle();
 })();
